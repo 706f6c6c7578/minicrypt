@@ -17,6 +17,8 @@ import (
 	"filippo.io/edwards25519"
 )
 
+const maxFileSize = 100 * 1024 * 1024 // 100 MB in Bytes
+
 // Write PEM files
 func savePEM(filename string, data []byte, pemType string) error {
 	block := &pem.Block{
@@ -75,6 +77,21 @@ func generateKeyPair() (ed25519.PrivateKey, ed25519.PublicKey, error) {
 
 // XChaCha20-Poly1305 encryption with random nonce
 func encrypt(pubKey ed25519.PublicKey, reader io.Reader, writer io.Writer) error {
+	// Check file size
+	if seeker, ok := reader.(io.Seeker); ok {
+		size, err := seeker.Seek(0, io.SeekEnd)
+		if err != nil {
+			return err
+		}
+		_, err = seeker.Seek(0, io.SeekStart)
+		if err != nil {
+			return err
+		}
+		if size > maxFileSize {
+			return fmt.Errorf("Message size too large!\nPlease use age for file encryption.\nhttps://github.com/FiloSottile/age\n")
+		}
+	}
+
 	curve25519PubKey, err := ed25519PublicKeyToCurve25519(pubKey)
 	if err != nil {
 		return err
@@ -190,7 +207,7 @@ func main() {
 	}
 
 	if os.Args[1] == "-g" {
-		// G
+		// Generate key pair
 		priv, pub, err := generateKeyPair()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating key pair: %v\n", err)
@@ -233,7 +250,11 @@ func main() {
 		pubKey := ed25519.PublicKey(pubKeyBytes)
 		err = encrypt(pubKey, os.Stdin, os.Stdout)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error encrypting: %v\n", err)
+			if strings.Contains(err.Error(), "file size exceeds the maximum allowed size") {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "Error encrypting: %v\n", err)
+			}
 			os.Exit(1)
 		}
 	}
