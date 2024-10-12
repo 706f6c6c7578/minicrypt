@@ -88,7 +88,7 @@ func encrypt(pubKey ed25519.PublicKey, reader io.Reader, writer io.Writer) error
 			return err
 		}
 		if size > maxFileSize {
-			return fmt.Errorf("Message size too large!\nPlease use age for file encryption.\nhttps://github.com/FiloSottile/age\n")
+			return fmt.Errorf("Message too large!\nPlease use age for file encryption.\nhttps://github.com/FiloSottile/age\n")
 		}
 	}
 
