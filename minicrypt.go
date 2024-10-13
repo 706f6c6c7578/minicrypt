@@ -12,18 +12,19 @@ import (
 	"os"
 	"strings"
 
+	"github.com/awnumar/memguard"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/curve25519"
 	"filippo.io/edwards25519"
 )
 
-const maxFileSize = 100 * 1024 * 1024 // 100 MB in Bytes
+const maxMessageSize = 20 * 1024 // 20 KB (20 * 1024 Bytes)
 
 // Write PEM files
-func savePEM(filename string, data []byte, pemType string) error {
+func savePEM(filename string, data *memguard.LockedBuffer, pemType string) error {
 	block := &pem.Block{
 		Type:  pemType,
-		Bytes: data,
+		Bytes: data.Bytes(),
 	}
 	file, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
@@ -34,7 +35,7 @@ func savePEM(filename string, data []byte, pemType string) error {
 }
 
 // Load PEM files
-func loadPEM(filename string) ([]byte, error) {
+func loadPEM(filename string) (*memguard.LockedBuffer, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, err
@@ -48,35 +49,39 @@ func loadPEM(filename string) ([]byte, error) {
 	if block == nil {
 		return nil, errors.New("PEM decoding failed")
 	}
-	return block.Bytes, nil
+	return memguard.NewBufferFromBytes(block.Bytes), nil
 }
 
 // Ed25519 to Curve25519 conversions
-func ed25519PrivateKeyToCurve25519(pk ed25519.PrivateKey) []byte {
+func ed25519PrivateKeyToCurve25519(pk *memguard.LockedBuffer) (*memguard.LockedBuffer, error) {
 	h := sha512.New()
-	h.Write(pk.Seed())
+	h.Write(pk.Bytes()[:32]) // Use only the seed part of the private key
 	out := h.Sum(nil)
-	return out[:curve25519.ScalarSize]
+	return memguard.NewBufferFromBytes(out[:curve25519.ScalarSize]), nil
 }
 
-func ed25519PublicKeyToCurve25519(pk ed25519.PublicKey) ([]byte, error) {
-	p, err := new(edwards25519.Point).SetBytes(pk)
+func ed25519PublicKeyToCurve25519(pk *memguard.LockedBuffer) (*memguard.LockedBuffer, error) {
+	p, err := new(edwards25519.Point).SetBytes(pk.Bytes())
 	if err != nil {
 		return nil, err
 	}
-	return p.BytesMontgomery(), nil
+	return memguard.NewBufferFromBytes(p.BytesMontgomery()), nil
 }
 
-func generateKeyPair() (ed25519.PrivateKey, ed25519.PublicKey, error) {
-    publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-    if err != nil {
-        return nil, nil, err
-    }
-    return privateKey, publicKey, nil
+func generateKeyPair() (*memguard.LockedBuffer, *memguard.LockedBuffer, error) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	
+	securePrivKey := memguard.NewBufferFromBytes(privateKey)
+	securePubKey := memguard.NewBufferFromBytes(publicKey)
+	
+	return securePrivKey, securePubKey, nil
 }
 
 // XChaCha20-Poly1305 encryption with random nonce
-func encrypt(pubKey ed25519.PublicKey, reader io.Reader, writer io.Writer) error {
+func encrypt(pubKey *memguard.LockedBuffer, reader io.Reader, writer io.Writer) error {
 	// Check file size
 	if seeker, ok := reader.(io.Seeker); ok {
 		size, err := seeker.Seek(0, io.SeekEnd)
@@ -87,8 +92,8 @@ func encrypt(pubKey ed25519.PublicKey, reader io.Reader, writer io.Writer) error
 		if err != nil {
 			return err
 		}
-		if size > maxFileSize {
-			return fmt.Errorf("Message too large!\nPlease use age for file encryption.\nhttps://github.com/FiloSottile/age\n")
+		if size > maxMessageSize {
+			return fmt.Errorf("Maximal allowed message size 20 KB!\nPlease use age for file encryption.\nhttps://github.com/FiloSottile/age\n")
 		}
 	}
 
@@ -96,33 +101,46 @@ func encrypt(pubKey ed25519.PublicKey, reader io.Reader, writer io.Writer) error
 	if err != nil {
 		return err
 	}
+	defer curve25519PubKey.Destroy()
 
 	// Generate ephemeral key pair
 	ephemeralPrivKey, ephemeralPubKey, err := generateKeyPair()
 	if err != nil {
 		return err
 	}
-	curve25519EphemeralPrivKey := ed25519PrivateKeyToCurve25519(ephemeralPrivKey)
+	defer ephemeralPrivKey.Destroy()
+	defer ephemeralPubKey.Destroy()
+
+	curve25519EphemeralPrivKey, err := ed25519PrivateKeyToCurve25519(ephemeralPrivKey)
+	if err != nil {
+		return err
+	}
+	defer curve25519EphemeralPrivKey.Destroy()
+
 	curve25519EphemeralPubKey, err := ed25519PublicKeyToCurve25519(ephemeralPubKey)
 	if err != nil {
 		return err
 	}
+	defer curve25519EphemeralPubKey.Destroy()
 
 	// Perform X25519 key exchange
-	sharedSecret, err := curve25519.X25519(curve25519EphemeralPrivKey, curve25519PubKey)
+	sharedSecret, err := curve25519.X25519(curve25519EphemeralPrivKey.Bytes(), curve25519PubKey.Bytes())
 	if err != nil {
 		return err
 	}
+	secureSharedSecret := memguard.NewBufferFromBytes(sharedSecret)
+	defer secureSharedSecret.Destroy()
 
 	// XChaCha20-Poly1305 setup
-	aead, err := chacha20poly1305.NewX(sharedSecret)
+	aead, err := chacha20poly1305.NewX(secureSharedSecret.Bytes())
 	if err != nil {
 		return err
 	}
 
 	// Generate a random nonce
-	nonce := make([]byte, aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
+	nonce := memguard.NewBuffer(aead.NonceSize())
+	defer nonce.Destroy()
+	if _, err := rand.Read(nonce.Bytes()); err != nil {
 		return err
 	}
 
@@ -131,59 +149,86 @@ func encrypt(pubKey ed25519.PublicKey, reader io.Reader, writer io.Writer) error
 	if err != nil {
 		return err
 	}
+	securePlaintext := memguard.NewBufferFromBytes(plaintext)
+	defer securePlaintext.Destroy()
 
 	// Encrypt the data
-	ciphertext := aead.Seal(nil, nonce, plaintext, nil)
+	ciphertext := aead.Seal(nil, nonce.Bytes(), securePlaintext.Bytes(), nil)
+    	secureCiphertext := memguard.NewBufferFromBytes(ciphertext)
+    	defer secureCiphertext.Destroy()
 
-	// Prepend the ephemeral public key and nonce to the ciphertext
-	finalOutput := append(curve25519EphemeralPubKey, nonce...)
-	finalOutput = append(finalOutput, ciphertext...)
+    	// Prepend the ephemeral public key and nonce to the ciphertext
+    	finalOutput := memguard.NewBuffer(curve25519EphemeralPubKey.Size() + nonce.Size() + secureCiphertext.Size())
+    	defer finalOutput.Destroy()
+
+   	copy(finalOutput.Bytes(), curve25519EphemeralPubKey.Bytes())
+    	copy(finalOutput.Bytes()[curve25519EphemeralPubKey.Size():], nonce.Bytes())
+    	copy(finalOutput.Bytes()[curve25519EphemeralPubKey.Size()+nonce.Size():], secureCiphertext.Bytes())
 
 	// Encode the output as Base64 and chunk it at 64 characters
-	encoded := base64.StdEncoding.EncodeToString(finalOutput)
+	encoded := base64.StdEncoding.EncodeToString(finalOutput.Bytes())
 	_, err = writer.Write([]byte(chunk64(encoded) + "\r\n"))
 	return err
 }
 
 // XChaCha20-Poly1305 decryption
-func decrypt(privKey ed25519.PrivateKey, reader io.Reader, writer io.Writer) error {
-	curve25519PrivKey := ed25519PrivateKeyToCurve25519(privKey)
+func decrypt(privKey *memguard.LockedBuffer, reader io.Reader, writer io.Writer) error {
+	curve25519PrivKey, err := ed25519PrivateKeyToCurve25519(privKey)
+	if err != nil {
+		return err
+	}
+	defer curve25519PrivKey.Destroy()
 
 	// Read and decode the input (base64)
 	encodedInput, err := io.ReadAll(reader)
 	if err != nil {
 		return err
 	}
+
 	decodedInput, err := base64.StdEncoding.DecodeString(string(encodedInput))
 	if err != nil {
 		return err
 	}
+	secureDecodedInput := memguard.NewBufferFromBytes(decodedInput)
+	defer secureDecodedInput.Destroy()
 
 	// Extract the ephemeral public key, nonce, and ciphertext
-	curve25519EphemeralPubKey := decodedInput[:32]
-	nonce := decodedInput[32:56]
-	ciphertext := decodedInput[56:]
+	curve25519EphemeralPubKey := memguard.NewBuffer(32)
+	nonce := memguard.NewBuffer(24)
+	ciphertext := memguard.NewBuffer(secureDecodedInput.Size() - 56)
+	
+	copy(curve25519EphemeralPubKey.Bytes(), secureDecodedInput.Bytes()[:32])
+	copy(nonce.Bytes(), secureDecodedInput.Bytes()[32:56])
+	copy(ciphertext.Bytes(), secureDecodedInput.Bytes()[56:])
+
+	defer curve25519EphemeralPubKey.Destroy()
+	defer nonce.Destroy()
+	defer ciphertext.Destroy()
 
 	// Perform X25519 key exchange
-	sharedSecret, err := curve25519.X25519(curve25519PrivKey, curve25519EphemeralPubKey)
+	sharedSecret, err := curve25519.X25519(curve25519PrivKey.Bytes(), curve25519EphemeralPubKey.Bytes())
 	if err != nil {
 		return err
 	}
+	secureSharedSecret := memguard.NewBufferFromBytes(sharedSecret)
+	defer secureSharedSecret.Destroy()
 
 	// XChaCha20-Poly1305 setup
-	aead, err := chacha20poly1305.NewX(sharedSecret)
+	aead, err := chacha20poly1305.NewX(secureSharedSecret.Bytes())
 	if err != nil {
 		return err
 	}
 
 	// Decrypt the data
-	plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := aead.Open(nil, nonce.Bytes(), ciphertext.Bytes(), nil)
 	if err != nil {
 		return err
 	}
+	securePlaintext := memguard.NewBufferFromBytes(plaintext)
+	defer securePlaintext.Destroy()
 
 	// Write the decrypted data
-	_, err = writer.Write(plaintext)
+	_, err = writer.Write(securePlaintext.Bytes())
 	return err
 }
 
@@ -199,6 +244,10 @@ func chunk64(input string) string {
 }
 
 func main() {
+	// Initialize memguard
+	memguard.CatchInterrupt()
+	defer memguard.Purge()
+
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: minicrypt public.pem < infile > outfile")
 		fmt.Println("       minicrypt -d private.pem < infile > outfile")
@@ -208,17 +257,20 @@ func main() {
 
 	if os.Args[1] == "-g" {
 		// Generate key pair
-		priv, pub, err := generateKeyPair()
+		securePrivKey, securePubKey, err := generateKeyPair()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating key pair: %v\n", err)
 			os.Exit(1)
 		}
-		err = savePEM("public.pem", pub, "PUBLIC KEY")
+		defer securePrivKey.Destroy()
+		defer securePubKey.Destroy()
+
+		err = savePEM("public.pem", securePubKey, "PUBLIC KEY")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error saving public.pem: %v\n", err)
 			os.Exit(1)
 		}
-		err = savePEM("private.pem", priv, "PRIVATE KEY")
+		err = savePEM("private.pem", securePrivKey, "PRIVATE KEY")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error saving private.pem: %v\n", err)
 			os.Exit(1)
@@ -229,12 +281,13 @@ func main() {
 
 	if os.Args[1] == "-d" {
 		// Decrypt
-		privKeyBytes, err := loadPEM(os.Args[2])
+		privKey, err := loadPEM(os.Args[2])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading private key: %v\n", err)
 			os.Exit(1)
 		}
-		privKey := ed25519.PrivateKey(privKeyBytes)
+		defer privKey.Destroy()
+
 		err = decrypt(privKey, os.Stdin, os.Stdout)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error decrypting: %v\n", err)
@@ -242,12 +295,13 @@ func main() {
 		}
 	} else {
 		// Encrypt
-		pubKeyBytes, err := loadPEM(os.Args[1])
+		pubKey, err := loadPEM(os.Args[1])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading public key: %v\n", err)
 			os.Exit(1)
 		}
-		pubKey := ed25519.PublicKey(pubKeyBytes)
+		defer pubKey.Destroy()
+
 		err = encrypt(pubKey, os.Stdin, os.Stdout)
 		if err != nil {
 			if strings.Contains(err.Error(), "file size exceeds the maximum allowed size") {
