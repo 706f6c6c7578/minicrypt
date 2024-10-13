@@ -82,19 +82,21 @@ func generateKeyPair() (*memguard.LockedBuffer, *memguard.LockedBuffer, error) {
 
 // XChaCha20-Poly1305 encryption with random nonce
 func encrypt(pubKey *memguard.LockedBuffer, reader io.Reader, writer io.Writer) error {
-	// Check file size
-	if seeker, ok := reader.(io.Seeker); ok {
-		size, err := seeker.Seek(0, io.SeekEnd)
-		if err != nil {
-			return err
-		}
-		_, err = seeker.Seek(0, io.SeekStart)
-		if err != nil {
-			return err
-		}
-		if size > maxMessageSize {
-			return fmt.Errorf("Maximal allowed message size 20 KB!\nPlease use age for file encryption.\nhttps://github.com/FiloSottile/age\n")
-		}
+	// Read up to maxMessageSize bytes from the reader
+	input := make([]byte, maxMessageSize)
+	n, err := io.ReadFull(reader, input)
+	if err != nil && err != io.ErrUnexpectedEOF {
+		return err
+	}
+	input = input[:n]
+
+	// Check if there's more data in the reader
+	extraByte := make([]byte, 1)
+	_, err = reader.Read(extraByte)
+	if err == nil {
+		return fmt.Errorf("Maximal allowed message size 20 KB!\nPlease use age for file encryption.\nhttps://github.com/FiloSottile/age\n")
+	} else if err != io.EOF {
+		return err
 	}
 
 	curve25519PubKey, err := ed25519PublicKeyToCurve25519(pubKey)
@@ -144,26 +146,21 @@ func encrypt(pubKey *memguard.LockedBuffer, reader io.Reader, writer io.Writer) 
 		return err
 	}
 
-	// Read the entire input data to be encrypted
-	plaintext, err := io.ReadAll(reader)
-	if err != nil {
-		return err
-	}
-	securePlaintext := memguard.NewBufferFromBytes(plaintext)
+	// Encrypt the data
+	securePlaintext := memguard.NewBufferFromBytes(input)
 	defer securePlaintext.Destroy()
 
-	// Encrypt the data
 	ciphertext := aead.Seal(nil, nonce.Bytes(), securePlaintext.Bytes(), nil)
-    	secureCiphertext := memguard.NewBufferFromBytes(ciphertext)
-    	defer secureCiphertext.Destroy()
+	secureCiphertext := memguard.NewBufferFromBytes(ciphertext)
+	defer secureCiphertext.Destroy()
 
-    	// Prepend the ephemeral public key and nonce to the ciphertext
-    	finalOutput := memguard.NewBuffer(curve25519EphemeralPubKey.Size() + nonce.Size() + secureCiphertext.Size())
-    	defer finalOutput.Destroy()
+	// Prepend the ephemeral public key and nonce to the ciphertext
+	finalOutput := memguard.NewBuffer(curve25519EphemeralPubKey.Size() + nonce.Size() + secureCiphertext.Size())
+	defer finalOutput.Destroy()
 
-   	copy(finalOutput.Bytes(), curve25519EphemeralPubKey.Bytes())
-    	copy(finalOutput.Bytes()[curve25519EphemeralPubKey.Size():], nonce.Bytes())
-    	copy(finalOutput.Bytes()[curve25519EphemeralPubKey.Size()+nonce.Size():], secureCiphertext.Bytes())
+	copy(finalOutput.Bytes(), curve25519EphemeralPubKey.Bytes())
+	copy(finalOutput.Bytes()[curve25519EphemeralPubKey.Size():], nonce.Bytes())
+	copy(finalOutput.Bytes()[curve25519EphemeralPubKey.Size()+nonce.Size():], secureCiphertext.Bytes())
 
 	// Encode the output as Base64 and chunk it at 64 characters
 	encoded := base64.StdEncoding.EncodeToString(finalOutput.Bytes())
