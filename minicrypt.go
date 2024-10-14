@@ -18,7 +18,7 @@ import (
 	"filippo.io/edwards25519"
 )
 
-const maxMessageSize = 20 * 1024 // 20 KB (20 * 1024 Bytes)
+const maxMessageSize = 32 * 1024 // 32 KB (32 * 1024 Bytes)
 
 // Write PEM files
 func savePEM(filename string, data *memguard.LockedBuffer, pemType string) error {
@@ -94,7 +94,7 @@ func encrypt(pubKey *memguard.LockedBuffer, reader io.Reader, writer io.Writer) 
 	extraByte := make([]byte, 1)
 	_, err = reader.Read(extraByte)
 	if err == nil {
-		return fmt.Errorf("Maximal allowed message size 20 KB!\nPlease use age for file encryption.\nhttps://github.com/FiloSottile/age\n")
+		return fmt.Errorf("Maximum allowed message size 32 KB!\nPlease use age for file encryption.\nhttps://github.com/FiloSottile/age\n")
 	} else if err != io.EOF {
 		return err
 	}
