@@ -18,7 +18,7 @@ import (
 	"filippo.io/edwards25519"
 )
 
-const maxMessageSize = 32 * 1024 // 32 KB (32 * 1024 Bytes)
+const maxMessageSize = 4096 * 1024 // 32 KB (4096 * 1024 Bytes)
 
 // Write PEM files
 func savePEM(filename string, data *memguard.LockedBuffer, pemType string) error {
