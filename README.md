@@ -2,7 +2,7 @@
 Encryption / decryption made easy, with Ed25519 and XChaCha20+poly1305.
 
 This little tool is intended for Alice and Bob. It allows exchanging  
-small messages, up to 32 KB, while handling one recipient only and  
+messages, up to 4096 KB, while handling one recipient only and  
 producing no metadata!
 
 It has only two commands -d for decryption and -g for key pair generation.  
