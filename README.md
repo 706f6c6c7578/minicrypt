@@ -1,6 +1,7 @@
 # minicrypt
 
-The world's easiest to use public key encryption program. 😊
+The world's easiest to use public key encryption program,  
+which produces no meta-data.😊
 
 For deterministic key pair generation I recommend [red](https://github.com/706f6c6c7578/red)  
 and for vanity key pairs I recommend [ve](https://github.com/706f6c6c7578/ve), which can be  
