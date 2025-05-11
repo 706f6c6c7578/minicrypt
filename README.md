@@ -2,6 +2,9 @@
 
 The world's easiest to use public key encryption program. 😊
 
+For deterministic key pair generation I recommend [red](https://github.com/706f6c6c7578/red)  
+and for vanity key pairs I recommend [ve](https://github.com/706f6c6c7578/ve).
+
 ## German Linux version with dark theme.
 ![minicrypt German Version Windows with dark theme](img/minicrypt-de.png)
 
