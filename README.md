@@ -4,8 +4,8 @@ The world's easiest to use public key encryption program,
 which produces no meta-data.😊
 
 For deterministic key pair generation I recommend [red](https://github.com/706f6c6c7578/red)  
-and for vanity key pairs I recommend [ve](https://github.com/706f6c6c7578/ve), which can be  
-converted to PEM format with [hex2pem](https://github.com/706f6c6c7578/hex2pem).
+and for vanity key pairs I recommend [ve](https://github.com/706f6c6c7578/ve), which can be   
+convert to PEM format with [hex2pem](https://github.com/706f6c6c7578/hex2pem).
 
 ## German Linux version with dark theme.
 ![minicrypt German Version Windows with dark theme](img/minicrypt-de.png)
