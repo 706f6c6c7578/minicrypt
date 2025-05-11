@@ -7,10 +7,10 @@ For deterministic key pair generation I recommend [red](https://github.com/706f6
 and for vanity key pairs I recommend [ve](https://github.com/706f6c6c7578/ve). Keys produced     
 with ve can be converted to PEM format with [hex2pem](https://github.com/706f6c6c7578/hex2pem).
 
-## German Linux version with dark theme.
+## German Windows version with dark theme.
 ![minicrypt German Version Windows with dark theme](img/minicrypt-de.png)
 
-##  English Windows version with light theme.
+##  English Linux version with light theme.
 ![minicrypt English Version Linux with light theme](img/minicrypt-en.png)
 
 If you like minicrypt, as much as I do, consider a small donation.  
