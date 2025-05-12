@@ -1,365 +1,371 @@
 package main
 
 import (
-    "bufio"
-    "bytes"
-    "crypto/ed25519"
-    "crypto/rand"
-    "crypto/sha512"
-    "encoding/base64"
-    "encoding/binary"
-    "encoding/hex"
-    "encoding/pem"
-    "errors"
-    "fmt"
-    "io"
-    "log"
-    mrand "math/rand"
-    "os"
-    "path/filepath"
-    "runtime"
-    "strconv"
-    "strings"
-    "time"
-    "github.com/awnumar/memguard"
-    "golang.org/x/crypto/chacha20poly1305"
-    "golang.org/x/crypto/curve25519"
-    "filippo.io/edwards25519"
-    "fyne.io/fyne/v2"
-    "fyne.io/fyne/v2/app"
-    "fyne.io/fyne/v2/container"
-    "fyne.io/fyne/v2/dialog"
-    "fyne.io/fyne/v2/layout"
-    "fyne.io/fyne/v2/theme"
-    "fyne.io/fyne/v2/widget"
+	"bufio"
+	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha512"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	mrand "math/rand"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+	"github.com/awnumar/memguard"
+	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/curve25519"
+	"filippo.io/edwards25519"
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 )
 
 const (
-    maxMessageSize = 4096 * 1024
-    signatureMarker = "----Ed25519 Signature----"
-    uint64Bytes     = 8
-    configDirName   = "minicrypt"
-    privKeyFile     = "private.pem"
-    defaultPadding  = 4096
-    separator       = "\n=== MINICRYPT PADDING SEPARATOR ===\n"
-    sizePrefix      = "PADDING_SIZE:"
-    paddingChars    = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    ed25519SignatureHexLength = ed25519.SignatureSize * 2
-    ed25519PublicKeyHexLength  = ed25519.PublicKeySize * 2
+	maxMessageSize = 4096 * 1024
+	signatureMarker = "----Ed25519 Signature----"
+	uint64Bytes = 8
+	configDirName = "minicrypt"
+	privKeyFile = "private.pem"
+	defaultPadding = 4096
+	separator = "\n=== MINICRYPT PADDING SEPARATOR ===\n"
+	sizePrefix = "PADDING_SIZE:"
+	paddingChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	ed25519SignatureHexLength = ed25519.SignatureSize * 2
+	ed25519PublicKeyHexLength = ed25519.PublicKeySize * 2
 )
 
 var (
-    domain = createDomain()
-    rng    = mrand.New(mrand.NewSource(time.Now().UnixNano()))
+	domain = createDomain()
+	rng = mrand.New(mrand.NewSource(time.Now().UnixNano()))
 )
 
 type InsufficientInputError struct {
-    Msg          string
-    RequiredSize int
+	Msg string
+	RequiredSize int
 }
+
 func (e *InsufficientInputError) Error() string {
-    return e.Msg
+	return e.Msg
 }
 
 func validatePublicKey(content string) error {
-    if content == "" {
-        return &InsufficientInputError{Msg: "Key content cannot be empty"}
-    }
-
-    block, _ := pem.Decode([]byte(content))
-    if block == nil || block.Type != "PUBLIC KEY" {
-        return errors.New("Not a valid PEM block of type PUBLIC KEY")
-    }
-
-    if len(block.Bytes) != ed25519.PublicKeySize {
-        return fmt.Errorf("invalid key size: %d bytes (expected %d)", 
-            len(block.Bytes), ed25519.PublicKeySize)
-    }
-
-    return nil
+	if content == "" {
+		return &InsufficientInputError{Msg: "Key content cannot be empty"}
+	}
+	block, _ := pem.Decode([]byte(content))
+	if block == nil || block.Type != "PUBLIC KEY" {
+		return errors.New("not a valid PEM block of type PUBLIC KEY")
+	}
+	if len(block.Bytes) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid key size: %d bytes (expected %d)", len(block.Bytes), ed25519.PublicKeySize)
+	}
+	return nil
 }
 
 func createDomain() []byte {
-    r := []byte{}
-    for i := 'A'; i <= 'Z'; i++ {
-        r = append(r, byte(i))
-    }
-    return r
+	r := []byte{}
+	for i := 'A'; i <= 'Z'; i++ {
+		r = append(r, byte(i))
+	}
+	return r
 }
 
 func getConfigDir() (string, error) {
-    usr, err := os.UserHomeDir()
-    if err != nil {
-        return "", err
-    }
-    var configDir string
-    switch runtime.GOOS {
-    case "windows":
-        configDir = filepath.Join(usr, "AppData", "Roaming", configDirName)
-    case "darwin":
-        configDir = filepath.Join(usr, "Library", "Application Support", configDirName)
-    default:
-        configDir = filepath.Join(usr, ".config", configDirName)
-    }
-    if err := os.MkdirAll(configDir, 0700); err != nil {
-        return "", err
-    }
-    return configDir, nil
+	usr, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	var configDir string
+	switch runtime.GOOS {
+	case "windows":
+		configDir = filepath.Join(usr, "AppData", "Roaming", configDirName)
+	case "darwin":
+		configDir = filepath.Join(usr, "Library", "Application Support", configDirName)
+	default:
+		configDir = filepath.Join(usr, ".config", configDirName)
+	}
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		return "", err
+	}
+	return configDir, nil
 }
 
 func savePEM(filename string, data *memguard.LockedBuffer, pemType string) error {
-    block := &pem.Block{
-        Type:  pemType,
-        Bytes: data.Bytes(),
-    }
-    dir := filepath.Dir(filename)
-    if err := os.MkdirAll(dir, 0700); err != nil {
-        return fmt.Errorf("could not create directory")
-    }
-    return os.WriteFile(filename, pem.EncodeToMemory(block), 0600)
+	block := &pem.Block{
+		Type: pemType,
+		Bytes: data.Bytes(),
+	}
+	dir := filepath.Dir(filename)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("could not create directory")
+	}
+	return os.WriteFile(filename, pem.EncodeToMemory(block), 0600)
 }
 
 func loadPEM(filename string) (*memguard.LockedBuffer, error) {
-    data, err := os.ReadFile(filename)
-    if err != nil {
-        return nil, fmt.Errorf("Could not read file")
-    }
-    block, _ := pem.Decode(data)
-    if block == nil {
-        return nil, errors.New("PEM decoding failed")
-    }
-    return memguard.NewBufferFromBytes(block.Bytes), nil
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("file could not be read")
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, errors.New("PEM decoding failed")
+	}
+	return memguard.NewBufferFromBytes(block.Bytes), nil
 }
 
 func loadPrivateKey() (*memguard.LockedBuffer, error) {
-    configDir, err := getConfigDir()
-    if err != nil {
-        return nil, err
-    }
-    
-    pemData, err := os.ReadFile(filepath.Join(configDir, "private.pem"))
-    if err != nil {
-        return nil, fmt.Errorf("Could not read private.pem: %v", err)
-    }
-
-    block, _ := pem.Decode(pemData)
-    if block == nil || block.Type != "PRIVATE KEY" {
-        return nil, errors.New("invalid PEM format for private key")
-    }
-
-    return memguard.NewBufferFromBytes(block.Bytes), nil
+	configDir, err := getConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	pemData, err := os.ReadFile(filepath.Join(configDir, "private.pem"))
+	if err != nil {
+		return nil, fmt.Errorf("private.pem could not be read: %v", err)
+	}
+	block, _ := pem.Decode(pemData)
+	if block == nil || block.Type != "PRIVATE KEY" {
+		return nil, errors.New("invalid PEM format for private key")
+	}
+	return memguard.NewBufferFromBytes(block.Bytes), nil
 }
 
 func loadPublicKey(name string) (*memguard.LockedBuffer, error) {
-    keyPath, err := getKeyPath(name)
+	keyPath, err := getKeyPath(name)
+	if err != nil {
+		return nil, fmt.Errorf("key path could not be determined: %v", err)
+	}
+	pemData, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("file could not be read: %v", err)
+	}
+	if err := validatePublicKey(string(pemData)); err != nil {
+		return nil, fmt.Errorf("validation failed: %v", err)
+	}
+	block, _ := pem.Decode(pemData)
+	return memguard.NewBufferFromBytes(block.Bytes), nil
+}
+
+func getPrivateKeyPath() (string, error) {
+    configDir, err := getConfigDir()
     if err != nil {
-        return nil, fmt.Errorf("Could not determine key path: %v", err)
+        return "", err
     }
-
-    pemData, err := os.ReadFile(keyPath)
-    if err != nil {
-        return nil, fmt.Errorf("Could not read file: %v", err)
-    }
-
-    if err := validatePublicKey(string(pemData)); err != nil {
-        return nil, fmt.Errorf("Validation failed: %v", err)
-    }
-
-    block, _ := pem.Decode(pemData)
-    return memguard.NewBufferFromBytes(block.Bytes), nil
+    return filepath.Join(configDir, "private.pem"), nil
 }
 
 func ed25519PrivateKeyToCurve25519(pk *memguard.LockedBuffer) (*memguard.LockedBuffer, error) {
-    if pk == nil || pk.Size() != ed25519.PrivateKeySize {
-        return nil, errors.New("Invalid private key size")
-    }
-    h := sha512.New()
-    h.Write(pk.Bytes()[:ed25519.SeedSize])
-    out := h.Sum(nil)
-    return memguard.NewBufferFromBytes(out[:curve25519.ScalarSize]), nil
+	if pk == nil || pk.Size() != ed25519.PrivateKeySize {
+		return nil, errors.New("invalid private key size")
+	}
+	h := sha512.New()
+	h.Write(pk.Bytes()[:ed25519.SeedSize])
+	out := h.Sum(nil)
+	return memguard.NewBufferFromBytes(out[:curve25519.ScalarSize]), nil
 }
 
 func ed25519PublicKeyToCurve25519(pk *memguard.LockedBuffer) (*memguard.LockedBuffer, error) {
-    if pk == nil || pk.Size() != ed25519.PublicKeySize {
-        return nil, errors.New("Invalid public key size")
-    }
-    p, err := new(edwards25519.Point).SetBytes(pk.Bytes())
-    if err != nil {
-        return nil, fmt.Errorf("Invalid public key")
-    }
-    return memguard.NewBufferFromBytes(p.BytesMontgomery()), nil
+	if pk == nil || pk.Size() != ed25519.PublicKeySize {
+		return nil, errors.New("invalid public key size")
+	}
+	p, err := new(edwards25519.Point).SetBytes(pk.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("invalid public key")
+	}
+	return memguard.NewBufferFromBytes(p.BytesMontgomery()), nil
 }
 
 func generateKeyPair() (*memguard.LockedBuffer, *memguard.LockedBuffer, error) {
-    pub, priv, err := ed25519.GenerateKey(rand.Reader)
-    if err != nil {
-        return nil, nil, fmt.Errorf("Key pair generation failed: %v", err)
-    }
-
-    privBlock := &pem.Block{
-        Type:  "PRIVATE KEY",
-        Bytes: priv,
-    }
-    
-    pubBlock := &pem.Block{
-        Type:  "PUBLIC KEY",
-        Bytes: pub,
-    }
-
-    privPEM := pem.EncodeToMemory(privBlock)
-    pubPEM := pem.EncodeToMemory(pubBlock)
-
-    securePriv := memguard.NewBufferFromBytes(privPEM)
-    securePub := memguard.NewBufferFromBytes(pubPEM)
-
-    return securePriv, securePub, nil
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("key pair generation failed: %v", err)
+	}
+	privBlock := &pem.Block{Type: "PRIVATE KEY", Bytes: priv}
+	pubBlock := &pem.Block{Type: "PUBLIC KEY", Bytes: pub}
+	privPEM := pem.EncodeToMemory(privBlock)
+	pubPEM := pem.EncodeToMemory(pubBlock)
+	securePriv := memguard.NewBufferFromBytes(privPEM)
+	securePub := memguard.NewBufferFromBytes(pubPEM)
+	return securePriv, securePub, nil
 }
 
 func encrypt(pubKey *memguard.LockedBuffer, r io.Reader, w io.Writer) error {
-    if pubKey == nil || pubKey.Size() != ed25519.PublicKeySize {
-        return errors.New("Encryption requires a valid public key (32 bytes)")
-    }
+	if pubKey == nil || pubKey.Size() != ed25519.PublicKeySize {
+		return errors.New("encryption requires a valid public key (32 bytes)")
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return fmt.Errorf("data could not be read: %v", err)
+	}
+	secureData := memguard.NewBufferFromBytes(data)
+	defer secureData.Destroy()
 
-    data, err := io.ReadAll(r)
-    if err != nil {
-        return fmt.Errorf("Could not read data: %v", err)
-    }
+	curvePub, err := ed25519PublicKeyToCurve25519(pubKey)
+	if err != nil {
+		return fmt.Errorf("key conversion failed: %v", err)
+	}
+	defer curvePub.Destroy()
 
-    curvePub, err := ed25519PublicKeyToCurve25519(pubKey)
-    if err != nil {
-        return fmt.Errorf("Key conversion failed: %v", err)
-    }
-    defer curvePub.Destroy()
+	edPub, edPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("temporary key pair could not be generated: %v", err)
+	}
+	ephPriv := memguard.NewBufferFromBytes(edPriv)
+	ephPub := memguard.NewBufferFromBytes(edPub)
+	defer ephPriv.Destroy()
+	defer ephPub.Destroy()
 
-    edPub, edPriv, err := ed25519.GenerateKey(rand.Reader)
-    if err != nil {
-        return fmt.Errorf("Could not generate temporary key pair: %v", err)
-    }
-    ephPriv := memguard.NewBufferFromBytes(edPriv)
-    ephPub := memguard.NewBufferFromBytes(edPub)
-    defer ephPriv.Destroy()
-    defer ephPub.Destroy()
+	curveEphPriv, err := ed25519PrivateKeyToCurve25519(ephPriv)
+	if err != nil {
+		return fmt.Errorf("ephemeral private key conversion failed: %v", err)
+	}
+	defer curveEphPriv.Destroy()
 
-    curveEphPriv, err := ed25519PrivateKeyToCurve25519(ephPriv)
-    if err != nil {
-        return fmt.Errorf("Ephemeral private key conversion failed: %v", err)
-    }
-    defer curveEphPriv.Destroy()
+	curveEphPub, err := ed25519PublicKeyToCurve25519(ephPub)
+	if err != nil {
+		return fmt.Errorf("ephemeral public key conversion failed: %v", err)
+	}
+	defer curveEphPub.Destroy()
 
-    curveEphPub, err := ed25519PublicKeyToCurve25519(ephPub)
-    if err != nil {
-        return fmt.Errorf("Ephemeral public key conversion failed: %v", err)
-    }
-    defer curveEphPub.Destroy()
+	sharedSecret, err := curve25519.X25519(curveEphPriv.Bytes(), curvePub.Bytes())
+	if err != nil {
+		return fmt.Errorf("key exchange failed: %v", err)
+	}
+	secureSecret := memguard.NewBufferFromBytes(sharedSecret)
+	defer secureSecret.Destroy()
 
-    sharedSecret, err := curve25519.X25519(curveEphPriv.Bytes(), curvePub.Bytes())
-    if err != nil {
-        return fmt.Errorf("Key exchange failed: %v", err)
-    }
-    secureSecret := memguard.NewBufferFromBytes(sharedSecret)
-    defer secureSecret.Destroy()
+	aead, err := chacha20poly1305.NewX(secureSecret.Bytes())
+	if err != nil {
+		return fmt.Errorf("encryption algorithm could not be initialized: %v", err)
+	}
 
-    aead, err := chacha20poly1305.NewX(secureSecret.Bytes())
-    if err != nil {
-        return fmt.Errorf("Could not initialize encryption algorithm: %v", err)
-    }
+	nonce := memguard.NewBuffer(aead.NonceSize())
+	defer nonce.Destroy()
+	if _, err := rand.Read(nonce.Bytes()); err != nil {
+		return fmt.Errorf("nonce could not be generated: %v", err)
+	}
 
-    nonce := memguard.NewBuffer(aead.NonceSize())
-    defer nonce.Destroy()
-    if _, err := rand.Read(nonce.Bytes()); err != nil {
-        return fmt.Errorf("Could not generate nonce: %v", err)
-    }
+	ciphertext := aead.Seal(nil, nonce.Bytes(), secureData.Bytes(), nil)
 
-    secureData := memguard.NewBufferFromBytes(data)
-    defer secureData.Destroy()
-    ciphertext := aead.Seal(nil, nonce.Bytes(), secureData.Bytes(), nil)
+	output := bytes.Buffer{}
+	output.Write(curveEphPub.Bytes())
+	output.Write(nonce.Bytes())
+	output.Write(ciphertext)
 
-    output := bytes.Buffer{}
-    output.Write(curveEphPub.Bytes())
-    output.Write(nonce.Bytes())
-    output.Write(ciphertext)
-
-    encoded := base64.StdEncoding.EncodeToString(output.Bytes())
-    _, err = fmt.Fprintln(w, chunk64(encoded))
-    return err
+	encoded := base64.StdEncoding.EncodeToString(output.Bytes())
+	_, err = fmt.Fprintln(w, chunk64(encoded))
+	return err
 }
 
 func decrypt(privKey *memguard.LockedBuffer, r io.Reader, w io.Writer) error {
-    if privKey == nil {
-        return errors.New("Decryption requires a valid private key")
-    }
-    data, err := io.ReadAll(r)
-    if err != nil {
-        return fmt.Errorf("Could not read input")
-    }
-    if bytes.Contains(data, []byte(signatureMarker)) {
-        parts := bytes.Split(data, []byte(signatureMarker))
-        if len(parts) < 1 {
-            return errors.New("invalid signed message format")
-        }
-        data = bytes.TrimSpace(parts[0])
-    }
-    decoded, err := base64.StdEncoding.DecodeString(string(data))
-    if err != nil {
-        return fmt.Errorf("base64 decoding failed: %v", err)
-    }
-    const headerSize = curve25519.PointSize + chacha20poly1305.NonceSizeX
-    if len(decoded) < headerSize {
-        return errors.New("message too short")
-    }
-    secureDecoded := memguard.NewBufferFromBytes(decoded)
-    defer secureDecoded.Destroy()
-    curvePriv, err := ed25519PrivateKeyToCurve25519(privKey)
-    if err != nil {
-        return fmt.Errorf("Private key conversion failed")
-    }
-    defer curvePriv.Destroy()
-    ephPub := secureDecoded.Bytes()[:curve25519.PointSize]
-    nonce := secureDecoded.Bytes()[curve25519.PointSize : headerSize]
-    ciphertext := secureDecoded.Bytes()[headerSize:]
-    sharedSecret, err := curve25519.X25519(curvePriv.Bytes(), ephPub)
-    if err != nil {
-        return fmt.Errorf("Key exchange failed")
-    }
-    secureSecret := memguard.NewBufferFromBytes(sharedSecret)
-    defer secureSecret.Destroy()
-    aead, err := chacha20poly1305.NewX(secureSecret.Bytes())
-    if err != nil {
-        return fmt.Errorf("failed to initialize decryption")
-    }
-    plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
-    if err != nil {
-        return fmt.Errorf("Decryption failed")
-    }
-    if _, err := w.Write(plaintext); err != nil {
-        return fmt.Errorf("Could not write output")
-    }
-    return nil
+	if privKey == nil {
+		return errors.New("decryption requires a valid private key")
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return fmt.Errorf("input could not be read")
+	}
+	if bytes.Contains(data, []byte(signatureMarker)) {
+		parts := bytes.Split(data, []byte(signatureMarker))
+		if len(parts) < 1 {
+			return errors.New("invalid signed message format")
+		}
+		data = bytes.TrimSpace(parts[0])
+	}
+	secureData := memguard.NewBufferFromBytes(data)
+	defer secureData.Destroy()
+
+	decoded, err := base64.StdEncoding.DecodeString(string(secureData.Bytes()))
+	if err != nil {
+		return fmt.Errorf("base64 decoding failed: %v", err)
+	}
+	const headerSize = curve25519.PointSize + chacha20poly1305.NonceSizeX
+	if len(decoded) < headerSize {
+		return errors.New("message too short")
+	}
+
+	curvePriv, err := ed25519PrivateKeyToCurve25519(privKey)
+	if err != nil {
+		return fmt.Errorf("private key conversion failed")
+	}
+	defer curvePriv.Destroy()
+
+	ephPub := decoded[:curve25519.PointSize]
+	nonce := decoded[curve25519.PointSize:headerSize]
+	ciphertext := decoded[headerSize:]
+
+	sharedSecret, err := curve25519.X25519(curvePriv.Bytes(), ephPub)
+	if err != nil {
+		return fmt.Errorf("key exchange failed")
+	}
+	secureSecret := memguard.NewBufferFromBytes(sharedSecret)
+	defer secureSecret.Destroy()
+
+	aead, err := chacha20poly1305.NewX(secureSecret.Bytes())
+	if err != nil {
+		return fmt.Errorf("decryption initialization failed")
+	}
+
+	plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return fmt.Errorf("decryption failed")
+	}
+	securePlaintext := memguard.NewBufferFromBytes(plaintext)
+	defer securePlaintext.Destroy()
+
+	if _, err := w.Write(securePlaintext.Bytes()); err != nil {
+		return fmt.Errorf("output could not be written")
+	}
+	return nil
 }
 
 func signMessage(keyPath string, r io.Reader, w io.Writer) error {
     privKey, err := loadPEM(keyPath)
     if err != nil {
-        return fmt.Errorf("Could not load private key")
+        return fmt.Errorf("private key could not be loaded")
     }
     defer privKey.Destroy()
+
     data, err := io.ReadAll(r)
     if err != nil {
-        return fmt.Errorf("Could not read data")
+        return fmt.Errorf("data could not be read")
     }
+
     data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
-    data = bytes.ReplaceAll(data, []byte("\r"), []byte("\n"))
     data = bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n"))
-    data = bytes.TrimSuffix(data, []byte("\r\n"))
-    if privKey.Size() != ed25519.PrivateKeySize {
-        return errors.New("Invalid private key size")
+    
+    data = []byte(strings.ToValidUTF8(string(data), ""))
+    
+    if bytes.HasSuffix(data, []byte("\r\n")) {
+        data = data[:len(data)-2]
     }
-    signature := ed25519.Sign(privKey.Bytes(), data)
-    signatureHex := hex.EncodeToString(signature)
+    
+    secureData := memguard.NewBufferFromBytes(data)
+    defer secureData.Destroy()
+
+    signature := ed25519.Sign(privKey.Bytes(), secureData.Bytes())
+    secureSignature := memguard.NewBufferFromBytes(signature)
+    defer secureSignature.Destroy()
+
+    signatureHex := hex.EncodeToString(secureSignature.Bytes())
     pubKeyBytes := ed25519.PrivateKey(privKey.Bytes()).Public().(ed25519.PublicKey)
     pubKeyHex := hex.EncodeToString(pubKeyBytes)
+
     _, err = fmt.Fprintf(w, "%s\r\n%s\r\n%s\r\n%s\r\n%s\r\n",
-        string(data),
+        string(secureData.Bytes()),
         signatureMarker,
         signatureHex[:64],
         signatureHex[64:],
@@ -368,185 +374,165 @@ func signMessage(keyPath string, r io.Reader, w io.Writer) error {
 }
 
 func verifyMessage(r io.Reader, w io.Writer) error {
-	scanner := bufio.NewScanner(r)
-	var data bytes.Buffer
-	var sigBlockLines []string
-	inSigBlock := false
-	dataCollected := false
-    var sigHexBuffer bytes.Buffer
-    var pubKeyHex string
-    var sigHex string
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if line == signatureMarker {
-			if inSigBlock {
-				return errors.New("Unexpected second signature marker found")
-			}
-			inSigBlock = true
-			dataCollected = true
-			continue
-		}
-
-		if inSigBlock {
-			sigBlockLines = append(sigBlockLines, line)
-		} else {
-			data.WriteString(line)
-			data.WriteString("\r\n")
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("Error reading input for verification")
-	}
-
-	if !inSigBlock {
-		return errors.New("Signature marker not found")
-	}
-
-	if len(sigBlockLines) < 1 {
-        return errors.New("Signature block incomplete")
-	}
-
-    pubKeyHex = strings.TrimSpace(sigBlockLines[len(sigBlockLines)-1])
-	sigLines := sigBlockLines[:len(sigBlockLines)-1]
-
-	if len(pubKeyHex) != ed25519PublicKeyHexLength {
-		return fmt.Errorf("Invalid public key length")
-	}
-
-	for _, sigLine := range sigLines {
-		trimmedSigLine := strings.TrimSpace(sigLine)
-		if len(trimmedSigLine) > 0 {
-			sigHexBuffer.WriteString(trimmedSigLine)
-		}
-	}
-	sigHex = sigHexBuffer.String()
-
-	if len(sigHex) != ed25519SignatureHexLength {
-		return fmt.Errorf("Invalid total signature length")
-	}
-
-	verifiedData := data.Bytes()
-	if dataCollected && bytes.HasSuffix(verifiedData, []byte("\r\n")) {
-		verifiedData = bytes.TrimSuffix(verifiedData, []byte("\r\n"))
-	}
-
-	pubKey, err := hex.DecodeString(pubKeyHex)
-	if err != nil {
-		return fmt.Errorf("Could not decode public key")
-	}
-	if len(pubKey) != ed25519.PublicKeySize {
-		return fmt.Errorf("Invalid public key size")
-	}
-
-	signature, err := hex.DecodeString(sigHex)
-	if err != nil {
-		return fmt.Errorf("Could not decode signature")
-	}
-	if len(signature) != ed25519.SignatureSize {
-		return fmt.Errorf("Invalid signature size")
-	}
-
-	isValid := ed25519.Verify(pubKey, verifiedData, signature)
-
-	if isValid {
-		_, err = fmt.Fprintln(w, "Signature is valid")
-	} else {
-		_, err = fmt.Fprintln(w, "Signature is invalid")
-	}
-
-	if err != nil {
-		return fmt.Errorf("Could not write verification result")
-	}
-
-	return nil
-}
-
-func pad(r io.Reader, size int, w io.Writer) error {
-    original, err := io.ReadAll(r)
+    data, err := io.ReadAll(r)
     if err != nil {
-        return fmt.Errorf("read error during padding")
+        return fmt.Errorf("read error: %v", err)
     }
-    estimatedMetadataSize := len(separator) + len(sizePrefix) + base64.StdEncoding.EncodedLen(uint64Bytes)
-    if size < len(original)+estimatedMetadataSize {
-        return fmt.Errorf("target size %d too small for content, minimum approx. %d bytes",
-            size, len(original)+estimatedMetadataSize)
+
+    data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+    data = bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n"))
+    
+    secureData := memguard.NewBufferFromBytes(data)
+    defer secureData.Destroy()
+
+    scanner := bufio.NewScanner(bytes.NewReader(secureData.Bytes()))
+    var messageBuffer bytes.Buffer
+    var sigBlockLines []string
+    inSigBlock := false
+
+    for scanner.Scan() {
+        line := scanner.Text()
+        if line == signatureMarker {
+            inSigBlock = true
+            continue
+        }
+        if inSigBlock {
+            sigBlockLines = append(sigBlockLines, line)
+        } else {
+            messageBuffer.WriteString(line)
+            messageBuffer.WriteString("\r\n")
+        }
     }
-    paddingNeeded := size - len(original) - estimatedMetadataSize
-    if paddingNeeded < 0 {
-        return fmt.Errorf("padding error: needed %d padding bytes", paddingNeeded)
+
+    messageBytes := messageBuffer.Bytes()
+    if bytes.HasSuffix(messageBytes, []byte("\r\n")) {
+        messageBytes = messageBytes[:len(messageBytes)-2]
     }
-    padding := strings.Repeat(paddingChars, paddingNeeded/len(paddingChars)+1)[:paddingNeeded]
-    var sizeBytesBuf bytes.Buffer
-    sizeBytesBuf.Grow(uint64Bytes)
-    err = binary.Write(&sizeBytesBuf, binary.LittleEndian, uint64(paddingNeeded))
+
+    secureMessage := memguard.NewBufferFromBytes(messageBytes)
+    defer secureMessage.Destroy()
+
+    if !inSigBlock {
+        return errors.New("signature marker not found")
+    }
+
+    if len(sigBlockLines) < 3 {
+        return errors.New("signature block incomplete")
+    }
+
+    pubKeyHex := sigBlockLines[len(sigBlockLines)-1]
+    sigHex := sigBlockLines[0] + sigBlockLines[1]
+
+    pubKey, err := hex.DecodeString(pubKeyHex)
     if err != nil {
-        return fmt.Errorf("Could not encode padding size")
+        return fmt.Errorf("public key could not be decoded")
     }
-    sizeBase64 := base64.StdEncoding.EncodeToString(sizeBytesBuf.Bytes())
-    sizeMarker := sizePrefix + sizeBase64
-    _, err = fmt.Fprintf(w, "%s%s%s%s", original, separator, padding, sizeMarker)
+
+    securePubKey := memguard.NewBufferFromBytes(pubKey)
+    defer securePubKey.Destroy()
+
+    signature, err := hex.DecodeString(sigHex)
+    if err != nil {
+        return fmt.Errorf("signature could not be decoded")
+    }
+
+    secureSignature := memguard.NewBufferFromBytes(signature)
+    defer secureSignature.Destroy()
+
+    isValid := ed25519.Verify(securePubKey.Bytes(), secureMessage.Bytes(), secureSignature.Bytes())
+    
+    if isValid {
+        _, err = fmt.Fprintln(w, "Signature is valid.")
+    } else {
+        _, err = fmt.Fprintln(w, "Signature is invalid.")
+    }
+
     return err
 }
 
+func pad(r io.Reader, size int, w io.Writer) error {
+	original, err := io.ReadAll(r)
+	if err != nil {
+		return fmt.Errorf("read error during padding")
+	}
+	estimatedMetadataSize := len(separator) + len(sizePrefix) + base64.StdEncoding.EncodedLen(uint64Bytes)
+	if size < len(original)+estimatedMetadataSize {
+		return fmt.Errorf("target size %d too small for content, minimum approx. %d bytes",
+			size, len(original)+estimatedMetadataSize)
+	}
+	paddingNeeded := size - len(original) - estimatedMetadataSize
+	if paddingNeeded < 0 {
+		return fmt.Errorf("padding error: needed %d padding bytes", paddingNeeded)
+	}
+	padding := strings.Repeat(paddingChars, paddingNeeded/len(paddingChars)+1)[:paddingNeeded]
+	var sizeBytesBuf bytes.Buffer
+	sizeBytesBuf.Grow(uint64Bytes)
+	err = binary.Write(&sizeBytesBuf, binary.LittleEndian, uint64(paddingNeeded))
+	if err != nil {
+		return fmt.Errorf("padding size could not be encoded")
+	}
+	sizeBase64 := base64.StdEncoding.EncodeToString(sizeBytesBuf.Bytes())
+	sizeMarker := sizePrefix + sizeBase64
+	_, err = fmt.Fprintf(w, "%s%s%s%s", original, separator, padding, sizeMarker)
+	return err
+}
+
 func unpad(r io.Reader) (io.Reader, error) {
-    data, err := io.ReadAll(r)
-    if err != nil {
-        return nil, fmt.Errorf("Read error during unpadding")
-    }
-    sepIndex := bytes.Index(data, []byte(separator))
-    if sepIndex == -1 {
-        return nil, errors.New("Invalid format: separator not found")
-    }
-    remaining := data[sepIndex+len(separator):]
-    sizeMarkerIndex := bytes.Index(remaining, []byte(sizePrefix))
-    if sizeMarkerIndex == -1 {
-        return nil, errors.New("Invalid format: size marker missing")
-    }
-    sizeDataBase64 := remaining[sizeMarkerIndex+len(sizePrefix):]
-    if len(sizeDataBase64) < base64.StdEncoding.EncodedLen(uint64Bytes) {
-        return nil, errors.New("Invalid size marker: base64 data too short")
-    }
-    sizeBytes, err := base64.StdEncoding.DecodeString(string(sizeDataBase64))
-    if err != nil {
-        return nil, fmt.Errorf("Invalid base64 decoding of size marker")
-    }
-    if len(sizeBytes) != uint64Bytes {
-        return nil, errors.New("Invalid size marker format")
-    }
-    paddingSize := binary.LittleEndian.Uint64(sizeBytes)
-    paddingContent := remaining[:sizeMarkerIndex]
-    if len(paddingContent) != int(paddingSize) {
-        return nil, fmt.Errorf("Corrupted data")
-    }
-    expectedTotalLength := sepIndex + len(separator) + int(paddingSize) + len(sizePrefix) + len(sizeDataBase64)
-    if len(data) != expectedTotalLength {
-        return nil, fmt.Errorf("Corrupted data")
-    }
-    return bytes.NewReader(data[:sepIndex]), nil
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("read error during unpadding")
+	}
+	sepIndex := bytes.Index(data, []byte(separator))
+	if sepIndex == -1 {
+		return nil, errors.New("invalid format: separator not found")
+	}
+	remaining := data[sepIndex+len(separator):]
+	sizeMarkerIndex := bytes.Index(remaining, []byte(sizePrefix))
+	if sizeMarkerIndex == -1 {
+		return nil, errors.New("invalid format: size marker missing")
+	}
+	sizeDataBase64 := remaining[sizeMarkerIndex+len(sizePrefix):]
+	if len(sizeDataBase64) < base64.StdEncoding.EncodedLen(uint64Bytes) {
+		return nil, errors.New("invalid size marker: base64 data too short")
+	}
+	sizeBytes, err := base64.StdEncoding.DecodeString(string(sizeDataBase64))
+	if err != nil {
+		return nil, fmt.Errorf("invalid base64 decoding of size marker")
+	}
+	if len(sizeBytes) != uint64Bytes {
+		return nil, errors.New("invalid size marker format")
+	}
+	paddingSize := binary.LittleEndian.Uint64(sizeBytes)
+	paddingContent := remaining[:sizeMarkerIndex]
+	if len(paddingContent) != int(paddingSize) {
+		return nil, fmt.Errorf("corrupted data")
+	}
+	expectedTotalLength := sepIndex + len(separator) + int(paddingSize) + len(sizePrefix) + len(sizeDataBase64)
+	if len(data) != expectedTotalLength {
+		return nil, fmt.Errorf("corrupted data")
+	}
+	return bytes.NewReader(data[:sepIndex]), nil
 }
 
 func chunk64(s string) string {
-    var buf strings.Builder
-    const chunkSize = 64
-    for len(s) > 0 {
-        chunk := s
-        if len(s) > chunkSize {
-            chunk = s[:chunkSize]
-        }
-        buf.WriteString(chunk)
-        buf.WriteString("\n")
-        s = s[len(chunk):]
-    }
-    return strings.TrimSpace(buf.String())
+	var buf strings.Builder
+	const chunkSize = 64
+	for len(s) > 0 {
+		chunk := s
+		if len(s) > chunkSize {
+			chunk = s[:chunkSize]
+		}
+		buf.WriteString(chunk)
+		buf.WriteString("\n")
+		s = s[len(chunk):]
+	}
+	return strings.TrimSpace(buf.String())
 }
 
 func keyPairExists() (bool, error) {
 	configDir, err := getConfigDir()
 	if err != nil {
-		return false, fmt.Errorf("Could not determine config directory: %v", err)
+		return false, fmt.Errorf("config directory could not be determined: %v", err)
 	}
 	privateKeyPath := filepath.Join(configDir, "private.pem")
 	publicKeyPath := filepath.Join(configDir, "public.pem")
@@ -555,87 +541,104 @@ func keyPairExists() (bool, error) {
 	if _, err := os.Stat(privateKeyPath); err == nil {
 		privateExists = true
 	} else if !os.IsNotExist(err) {
-		return false, fmt.Errorf("Error checking %s: %v", privateKeyPath, err)
+		return false, fmt.Errorf("error checking %s: %v", privateKeyPath, err)
 	}
 
 	publicExists := false
 	if _, err := os.Stat(publicKeyPath); err == nil {
 		publicExists = true
 	} else if !os.IsNotExist(err) {
-		return false, fmt.Errorf("Error checking %s: %v", publicKeyPath, err)
+		return false, fmt.Errorf("error checking %s: %v", publicKeyPath, err)
 	}
 
 	return privateExists && publicExists, nil
 }
 
 func processSPE(recipient string, paddingSize int, r io.Reader, w io.Writer) error {
+    inputData, err := io.ReadAll(r)
+    if err != nil {
+        return fmt.Errorf("read error: %v", err)
+    }
+    
+    inputData = bytes.ReplaceAll(inputData, []byte("\r\n"), []byte("\n"))
+    inputData = bytes.ReplaceAll(inputData, []byte("\n"), []byte("\r\n"))
+    
+    inputData = []byte(strings.ToValidUTF8(string(inputData), ""))
+    
+    secureInput := memguard.NewBufferFromBytes(inputData)
+    defer secureInput.Destroy()
+
     var signBuffer bytes.Buffer
     privKeyPath, err := getPrivateKeyPath()
     if err != nil {
-        return fmt.Errorf("Private key path: %v", err)
+        return fmt.Errorf("private key path: %v", err)
     }
 
-    if err := signMessage(privKeyPath, r, &signBuffer); err != nil {
-        return fmt.Errorf("Signing failed: %v", err)
+    if err := signMessage(privKeyPath, bytes.NewReader(secureInput.Bytes()), &signBuffer); err != nil {
+        return fmt.Errorf("signing: %v", err)
     }
+
+    secureSignedData := memguard.NewBufferFromBytes(signBuffer.Bytes())
+    defer secureSignedData.Destroy()
 
     var padBuffer bytes.Buffer
-    if err := pad(bytes.NewReader(signBuffer.Bytes()), paddingSize, &padBuffer); err != nil {
-        return fmt.Errorf("Padding failed: %v", err)
+    if err := pad(bytes.NewReader(secureSignedData.Bytes()), paddingSize, &padBuffer); err != nil {
+        return fmt.Errorf("padding: %v", err)
     }
+
+    securePaddedData := memguard.NewBufferFromBytes(padBuffer.Bytes())
+    defer securePaddedData.Destroy()
 
     pubKeyBuf, err := loadPublicKey(recipient)
     if err != nil {
-        return fmt.Errorf("Key loading: %v", err)
+        return fmt.Errorf("key loading: %v", err)
     }
     defer pubKeyBuf.Destroy()
 
-    if err := encrypt(pubKeyBuf, bytes.NewReader(padBuffer.Bytes()), w); err != nil {
-        return fmt.Errorf("Encryption: %v", err)
+    if err := encrypt(pubKeyBuf, bytes.NewReader(securePaddedData.Bytes()), w); err != nil {
+        return fmt.Errorf("encryption: %v", err)
     }
 
     return nil
 }
 
 func processDUV(r io.Reader, w io.Writer) error {
-	var decryptBuffer bytes.Buffer
-	privKey, err := loadPrivateKey()
-	if err != nil {
-		return fmt.Errorf("Could not load private key", err)
-	}
-	defer privKey.Destroy()
-	if err := decrypt(privKey, r, &decryptBuffer); err != nil {
-		return fmt.Errorf("Decryption failed", err)
-	}
-
-	unpaddedReader, err := unpad(bytes.NewReader(decryptBuffer.Bytes()))
-	if err != nil {
-		log.Printf("Unpadding failed, attempting verification of raw data")
-		unpaddedReader = bytes.NewReader(decryptBuffer.Bytes())
-	}
-
-	var verifyBuffer bytes.Buffer
-	if _, err := io.Copy(&verifyBuffer, unpaddedReader); err != nil {
-		return fmt.Errorf("Could not copy data to buffer", err)
-	}
-
-    if _, err := w.Write(verifyBuffer.Bytes()); err != nil {
-        return fmt.Errorf("Could not write decrypted plaintext", err)
-    }
-
-	if err := verifyMessage(bytes.NewReader(verifyBuffer.Bytes()), w); err != nil {
-		return fmt.Errorf("Verification failed", err)
-	}
-
-	return nil
-}
-
-func getPrivateKeyPath() (string, error) {
-    configDir, err := getConfigDir()
+    var decryptBuffer bytes.Buffer
+    privKey, err := loadPrivateKey()
     if err != nil {
-        return "", err
+        return fmt.Errorf("private key could not be loaded: %v", err)
     }
-    return filepath.Join(configDir, privKeyFile), nil
+    defer privKey.Destroy()
+
+    if err := decrypt(privKey, r, &decryptBuffer); err != nil {
+        return fmt.Errorf("decryption failed: %v", err)
+    }
+
+    unpaddedReader, err := unpad(bytes.NewReader(decryptBuffer.Bytes()))
+    if err != nil {
+        return fmt.Errorf("unpadding failed: %v", err)
+    }
+
+    var verifyBuffer bytes.Buffer
+    if _, err := io.Copy(&verifyBuffer, unpaddedReader); err != nil {
+        return fmt.Errorf("data could not be copied to buffer: %v", err)
+    }
+
+    data := bytes.ReplaceAll(verifyBuffer.Bytes(), []byte("\r\n"), []byte("\n"))
+    data = bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n"))
+    
+    secureBuffer := memguard.NewBufferFromBytes(data)
+    defer secureBuffer.Destroy()
+
+    if _, err := w.Write(secureBuffer.Bytes()); err != nil {
+        return fmt.Errorf("decrypted plaintext could not be written: %v", err)
+    }
+
+    if err := verifyMessage(bytes.NewReader(secureBuffer.Bytes()), w); err != nil {
+        return fmt.Errorf("verification failed: %v", err)
+    }
+
+    return nil
 }
 
 func isCanvasEmpty(text string) bool {
@@ -643,13 +646,12 @@ func isCanvasEmpty(text string) bool {
 }
 
 func savePublicKey(name, content string) error {
-    configDir, err := getConfigDir()
-    if err != nil {
-        return fmt.Errorf("Could not determine config directory: %v", err)
-    }
-    
-    keyPath := filepath.Join(configDir, name+".pem")
-    return os.WriteFile(keyPath, []byte(content), 0600)
+	configDir, err := getConfigDir()
+	if err != nil {
+		return fmt.Errorf("config directory could not be determined: %v", err)
+	}
+	keyPath := filepath.Join(configDir, name+".pem")
+	return os.WriteFile(keyPath, []byte(content), 0600)
 }
 
 func showErrorDialog(message string, parent fyne.Window) {
@@ -657,47 +659,43 @@ func showErrorDialog(message string, parent fyne.Window) {
 }
 
 func min(a, b int) int {
-    if a < b {
-        return a
-    }
-    return b
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func publicKeyExists(keyName string) bool {
-    keyPath, err := getKeyPath(keyName)
-    if err != nil {
-        return false
-    }
-
-    _, err = os.Stat(keyPath) 
-    if err == nil {
-        return true
-    }
-    if os.IsNotExist(err) {
-        return false
-    }
-
-    return false
+	keyPath, err := getKeyPath(keyName)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(keyPath) 
+	if err == nil {
+		return true
+	}
+	if os.IsNotExist(err) {
+		return false
+	}
+	return false
 }
 
 func savePublicKeyFromContent(name string, content string) error {
-    return nil
+	return nil
 }
 
 func updateStatus(msg string) {
-    fmt.Printf("Status: %s\n", msg)
+	fmt.Printf("Status: %s\n", msg)
 }
 
 func getKeyPath(name string) (string, error) {
-    configDir, err := getConfigDir()
-    if err != nil {
-        return "", fmt.Errorf("Could not determine config directory: %v", err)
-    }
-
-    keyFileName := fmt.Sprintf("%s.pem", name)
-    keyPath := filepath.Join(configDir, keyFileName)
-
-    return keyPath, nil
+	configDir, err := getConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("config directory could not be determined: %v", err)
+	}
+	keyFileName := fmt.Sprintf("%s.pem", name)
+	keyPath := filepath.Join(configDir, keyFileName)
+	return keyPath, nil
 }
 
 func main() {
@@ -706,7 +704,7 @@ func main() {
 	defer memguard.Purge()
 
 	a := app.New()
-	a.Settings().SetTheme(theme.DarkTheme())
+	a.Settings().SetTheme(theme.LightTheme())
 	w := a.NewWindow("minicrypt")
 	w.Resize(fyne.NewSize(800, 600))
     w.SetOnClosed(func() {
