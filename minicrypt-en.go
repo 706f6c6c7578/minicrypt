@@ -374,80 +374,94 @@ func signMessage(keyPath string, r io.Reader, w io.Writer) error {
 }
 
 func verifyMessage(r io.Reader, w io.Writer) error {
-    data, err := io.ReadAll(r)
-    if err != nil {
-        return fmt.Errorf("read error: %v", err)
-    }
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return fmt.Errorf("read error: %v", err)
+	}
 
-    data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
-    data = bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n"))
-    
-    secureData := memguard.NewBufferFromBytes(data)
-    defer secureData.Destroy()
+	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	data = bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n"))
 
-    scanner := bufio.NewScanner(bytes.NewReader(secureData.Bytes()))
-    var messageBuffer bytes.Buffer
-    var sigBlockLines []string
-    inSigBlock := false
+	secureData := memguard.NewBufferFromBytes(data)
+	defer secureData.Destroy()
 
-    for scanner.Scan() {
-        line := scanner.Text()
-        if line == signatureMarker {
-            inSigBlock = true
-            continue
-        }
-        if inSigBlock {
-            sigBlockLines = append(sigBlockLines, line)
-        } else {
-            messageBuffer.WriteString(line)
-            messageBuffer.WriteString("\r\n")
-        }
-    }
+	scanner := bufio.NewScanner(bytes.NewReader(secureData.Bytes()))
+	var messageBuffer bytes.Buffer
+	var sigBlockLines []string
+	inSigBlock := false
 
-    messageBytes := messageBuffer.Bytes()
-    if bytes.HasSuffix(messageBytes, []byte("\r\n")) {
-        messageBytes = messageBytes[:len(messageBytes)-2]
-    }
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == signatureMarker {
+			inSigBlock = true
+			continue
+		}
+		if inSigBlock {
+			sigBlockLines = append(sigBlockLines, line)
+		} else {
+			messageBuffer.WriteString(line)
+			messageBuffer.WriteString("\r\n")
+		}
+	}
 
-    secureMessage := memguard.NewBufferFromBytes(messageBytes)
-    defer secureMessage.Destroy()
+	messageBytes := messageBuffer.Bytes()
 
-    if !inSigBlock {
-        return errors.New("signature marker not found")
-    }
+	for bytes.HasSuffix(messageBytes, []byte("\r\n")) {
+		messageBytes = messageBytes[:len(messageBytes)-2]
+	}
 
-    if len(sigBlockLines) < 3 {
-        return errors.New("signature block incomplete")
-    }
+	secureMessage := memguard.NewBufferFromBytes(messageBytes)
+	defer secureMessage.Destroy()
 
-    pubKeyHex := sigBlockLines[len(sigBlockLines)-1]
-    sigHex := sigBlockLines[0] + sigBlockLines[1]
+	if !inSigBlock {
+		return errors.New("signature marker not found")
+	}
 
-    pubKey, err := hex.DecodeString(pubKeyHex)
-    if err != nil {
-        return fmt.Errorf("public key could not be decoded")
-    }
+	if len(sigBlockLines) < 3 {
+		return errors.New("signature block incomplete")
+	}
 
-    securePubKey := memguard.NewBufferFromBytes(pubKey)
-    defer securePubKey.Destroy()
+	pubKeyHex := strings.TrimSpace(sigBlockLines[len(sigBlockLines)-1])
+	sigHex := strings.TrimSpace(sigBlockLines[0]) + strings.TrimSpace(sigBlockLines[1])
 
-    signature, err := hex.DecodeString(sigHex)
-    if err != nil {
-        return fmt.Errorf("signature could not be decoded")
-    }
+	if len(pubKeyHex) != ed25519PublicKeyHexLength {
+		return fmt.Errorf("invalid public key length in signature block: expected %d, got %d", ed25519PublicKeyHexLength, len(pubKeyHex))
+	}
+	if len(sigHex) != ed25519SignatureHexLength {
+		return fmt.Errorf("invalid signature length in signature block: expected %d, got %d", ed25519SignatureHexLength, len(sigHex))
+	}
 
-    secureSignature := memguard.NewBufferFromBytes(signature)
-    defer secureSignature.Destroy()
+	pubKey, err := hex.DecodeString(pubKeyHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode public key: %v", err)
+	}
+	if len(pubKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid public key size: expected %d bytes, got %d", ed25519.PublicKeySize, len(pubKey))
+	}
 
-    isValid := ed25519.Verify(securePubKey.Bytes(), secureMessage.Bytes(), secureSignature.Bytes())
-    
-    if isValid {
-        _, err = fmt.Fprintln(w, "Signature is valid.")
-    } else {
-        _, err = fmt.Fprintln(w, "Signature is invalid.")
-    }
+	securePubKey := memguard.NewBufferFromBytes(pubKey)
+	defer securePubKey.Destroy()
 
-    return err
+	signature, err := hex.DecodeString(sigHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode signature: %v", err)
+	}
+	if len(signature) != ed25519.SignatureSize {
+		return fmt.Errorf("invalid signature size: expected %d bytes, got %d", ed25519.SignatureSize, len(signature))
+	}
+
+	secureSignature := memguard.NewBufferFromBytes(signature)
+	defer secureSignature.Destroy()
+
+	isValid := ed25519.Verify(securePubKey.Bytes(), secureMessage.Bytes(), secureSignature.Bytes())
+
+	if isValid {
+		_, err = fmt.Fprintln(w, "Signature is valid.")
+	} else {
+		_, err = fmt.Fprintln(w, "Signature is invalid.")
+	}
+
+	return err
 }
 
 func pad(r io.Reader, size int, w io.Writer) error {
